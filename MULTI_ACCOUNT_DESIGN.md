@@ -12,16 +12,16 @@ This document describes the design for adding multi-account support to the Kiro 
 {
   "accounts": [
     {
-      "id": "dj",
-      "name": "Dj Account",
+      "id": "account-1",
+      "name": "Primary Account",
       "refreshToken": "...",
       "profileArn": "...",
       "region": "us-east-1",
       "overage": false
     },
     {
-      "id": "sherra",
-      "name": "Sherra Account",
+      "id": "account-2",
+      "name": "Secondary Account",
       "refreshToken": "...",
       "profileArn": "...",
       "region": "us-east-1",
@@ -37,15 +37,15 @@ This document describes the design for adding multi-account support to the Kiro 
 
 ```python
 {
-  "current_account_id": "dj",
+  "current_account_id": "account-1",
   "last_health_check": 1713012660,
   "accounts": {
-    "dj": {
+    "account-1": {
       "has_credits": True,
       "last_checked": 1713012660,
       "error": None
     },
-    "sherra": {
+    "account-2": {
       "has_credits": False,
       "last_checked": 1713012660,
       "error": "MONTHLY_REQUEST_COUNT"
@@ -139,13 +139,13 @@ PROFILE_ARN="..."
 # Multi-account (new)
 KIRO_ACCOUNTS_JSON='[
   {
-    "id": "dj",
+    "id": "account-1",
     "refreshToken": "...",
     "profileArn": "...",
     "overage": false
   },
   {
-    "id": "sherra",
+    "id": "account-2",
     "refreshToken": "...",
     "profileArn": "...",
     "overage": true
@@ -159,13 +159,13 @@ KIRO_HEALTH_CHECK_INTERVAL_HOURS=1
 {
   "accounts": [
     {
-      "id": "dj",
+      "id": "account-1",
       "refreshToken": "...",
       "profileArn": "...",
       "overage": false
     },
     {
-      "id": "sherra",
+      "id": "account-2",
       "refreshToken": "...",
       "profileArn": "...",
       "overage": true

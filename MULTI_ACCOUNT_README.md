@@ -24,16 +24,16 @@ Create a `kiro-accounts.json` file:
 {
   "accounts": [
     {
-      "id": "dj",
-      "name": "Dj Account",
+      "id": "account-1",
+      "name": "Primary Account",
       "refreshToken": "eyJ...",
       "profileArn": "arn:aws:codewhisperer:us-east-1:...",
       "region": "us-east-1",
       "overage": false
     },
     {
-      "id": "sherra",
-      "name": "Sherra Account (Overage)",
+      "id": "account-2",
+      "name": "Secondary Account (Overage)",
       "refreshToken": "eyJ...",
       "profileArn": "arn:aws:codewhisperer:us-east-1:...",
       "region": "us-east-1",
@@ -66,15 +66,15 @@ curl -H "Authorization: Bearer my-super-secret-password-123" \
 Response:
 ```json
 {
-  "current_account": "dj",
+  "current_account": "account-1",
   "accounts": {
-    "dj": {
+    "account-1": {
       "has_credits": true,
       "last_checked": "2026-04-13T11:15:00",
       "last_error": null,
       "error_count": 0
     },
-    "sherra": {
+    "account-2": {
       "has_credits": true,
       "last_checked": "2026-04-13T11:15:00",
       "last_error": null,
@@ -122,13 +122,13 @@ Alternatively, use environment variables:
 ```bash
 export KIRO_ACCOUNTS_JSON='[
   {
-    "id": "dj",
+    "id": "account-1",
     "refreshToken": "...",
     "profileArn": "...",
     "overage": false
   },
   {
-    "id": "sherra",
+    "id": "account-2",
     "refreshToken": "...",
     "profileArn": "...",
     "overage": true

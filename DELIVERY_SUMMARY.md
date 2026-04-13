@@ -147,13 +147,13 @@ Switch Back if Primary Available
 {
   "accounts": [
     {
-      "id": "dj",
+      "id": "account-1",
       "refreshToken": "...",
       "profileArn": "...",
       "overage": false
     },
     {
-      "id": "sherra",
+      "id": "account-2",
       "refreshToken": "...",
       "profileArn": "...",
       "overage": true

@@ -17,17 +17,17 @@ Create `kiro-accounts.json`:
 {
   "accounts": [
     {
-      "id": "dj",
-      "name": "Dj Account",
-      "refreshToken": "YOUR_DJ_REFRESH_TOKEN_HERE",
+      "id": "account-1",
+      "name": "Primary Account",
+      "refreshToken": "YOUR_PRIMARY_REFRESH_TOKEN_HERE",
       "profileArn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/default",
       "region": "us-east-1",
       "overage": false
     },
     {
-      "id": "sherra",
-      "name": "Sherra Account (Overage)",
-      "refreshToken": "YOUR_SHERRA_REFRESH_TOKEN_HERE",
+      "id": "account-2",
+      "name": "Secondary Account (Overage)",
+      "refreshToken": "YOUR_SECONDARY_REFRESH_TOKEN_HERE",
       "profileArn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/default",
       "region": "us-east-1",
       "overage": true
@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer my-super-secret-password-123" \
 - [ ] Gateway starts without errors
 - [ ] Health endpoint returns account status
 - [ ] Test request succeeds
-- [ ] Logs show "Initial account selected: dj"
+- [ ] Logs show "Initial account selected: account-1"
 
 ## Troubleshooting
 

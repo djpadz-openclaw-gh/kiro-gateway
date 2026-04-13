@@ -129,20 +129,20 @@ Example 1: Environment variable configuration
 
 export KIRO_ACCOUNTS_JSON='[
   {
-    "id": "dj",
+    "id": "account-1",
     "refreshToken": "eyJ...",
     "profileArn": "arn:aws:codewhisperer:us-east-1:...",
     "region": "us-east-1",
     "overage": false,
-    "name": "Dj Account"
+    "name": "Primary Account"
   },
   {
-    "id": "sherra",
+    "id": "account-2",
     "refreshToken": "eyJ...",
     "profileArn": "arn:aws:codewhisperer:us-east-1:...",
     "region": "us-east-1",
     "overage": true,
-    "name": "Sherra Account (Overage)"
+    "name": "Secondary Account (Overage)"
   }
 ]'
 export KIRO_HEALTH_CHECK_INTERVAL_HOURS=1
@@ -154,20 +154,20 @@ Example 2: Configuration file (kiro-accounts.json)
 {
   "accounts": [
     {
-      "id": "dj",
+      "id": "account-1",
       "refreshToken": "eyJ...",
       "profileArn": "arn:aws:codewhisperer:us-east-1:...",
       "region": "us-east-1",
       "overage": false,
-      "name": "Dj Account"
+      "name": "Primary Account"
     },
     {
-      "id": "sherra",
+      "id": "account-2",
       "refreshToken": "eyJ...",
       "profileArn": "arn:aws:codewhisperer:us-east-1:...",
       "region": "us-east-1",
       "overage": true,
-      "name": "Sherra Account (Overage)"
+      "name": "Secondary Account (Overage)"
     }
   ],
   "healthCheckIntervalHours": 1,
