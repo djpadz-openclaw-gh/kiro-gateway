@@ -20,18 +20,22 @@ from loguru import logger
 class AccountConfig:
     """Configuration for a single Kiro account."""
     id: str
-    refresh_token: str
+    refresh_token: Optional[str] = None
     profile_arn: Optional[str] = None
     region: str = "us-east-1"
     overage: bool = False
     name: Optional[str] = None
+    # AWS SSO OIDC (kiro-cli) credentials
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
     
     def __post_init__(self):
         """Validate account configuration."""
         if not self.id:
             raise ValueError("Account id is required")
-        if not self.refresh_token:
-            raise ValueError(f"Account {self.id}: refresh_token is required")
+        # Either refresh_token (Kiro Desktop) or client_id+client_secret (AWS SSO OIDC) required
+        if not self.refresh_token and not (self.client_id and self.client_secret):
+            raise ValueError(f"Account {self.id}: either refresh_token or (client_id + client_secret) is required")
         if not self.name:
             self.name = self.id
 
@@ -130,7 +134,9 @@ def load_multi_account_config_from_env_vars() -> Optional[MultiAccountConfig]:
         
         account = AccountConfig(
             id=acc_data.get("id", f"account-{account_num}"),
-            refresh_token=acc_data["refresh_token"],
+            refresh_token=acc_data.get("refresh_token"),
+            client_id=acc_data.get("client_id"),
+            client_secret=acc_data.get("client_secret"),
             profile_arn=acc_data.get("profile_arn"),
             region=acc_data.get("region", "us-east-1"),
             overage=acc_data.get("overage", False),
