@@ -53,8 +53,10 @@ class MultiAccountConfig:
         if len(account_ids) != len(set(account_ids)):
             raise ValueError("Duplicate account IDs found")
         
-        # Check that at least one account is marked as overage
+        # Check that exactly one account is marked as overage
         overage_accounts = [acc for acc in self.accounts if acc.overage]
+        if len(overage_accounts) > 1:
+            raise ValueError(f"Multiple accounts have overage enabled. Only one account can have overage=true")
         if not overage_accounts:
             logger.warning("No account marked as overage account. Failover may not work correctly.")
     
@@ -71,6 +73,92 @@ class MultiAccountConfig:
             if acc.overage:
                 return acc
         return None
+
+
+def load_multi_account_config_from_env_vars() -> Optional[MultiAccountConfig]:
+    """
+    Load multi-account configuration from ACCOUNT_N_* environment variables.
+    
+    Supports arbitrary number of accounts using pattern:
+    - ACCOUNT_1_REFRESH_TOKEN
+    - ACCOUNT_1_NAME
+    - ACCOUNT_1_PROFILE_ARN
+    - ACCOUNT_1_REGION
+    - ACCOUNT_1_OVERAGE
+    - ACCOUNT_2_REFRESH_TOKEN
+    - etc.
+    
+    Returns:
+        MultiAccountConfig if accounts found, None otherwise
+    """
+    accounts_dict: Dict[int, Dict[str, Any]] = {}
+    
+    # Scan environment variables for ACCOUNT_N_* pattern
+    for key, value in os.environ.items():
+        if key.startswith("ACCOUNT_"):
+            parts = key.split("_", 2)  # Split into ["ACCOUNT", "N", "FIELD"]
+            if len(parts) >= 3:
+                try:
+                    account_num = int(parts[1])
+                    field_name = "_".join(parts[2:]).lower()
+                    
+                    if account_num not in accounts_dict:
+                        accounts_dict[account_num] = {}
+                    
+                    # Parse boolean values
+                    if field_name == "overage":
+                        accounts_dict[account_num][field_name] = value.lower() in ("true", "1", "yes")
+                    else:
+                        accounts_dict[account_num][field_name] = value
+                except (ValueError, IndexError):
+                    continue
+    
+    if not accounts_dict:
+        return None
+    
+    # Build AccountConfig objects
+    accounts = []
+    overage_count = 0
+    
+    for account_num in sorted(accounts_dict.keys()):
+        acc_data = accounts_dict[account_num]
+        
+        # Validate required fields
+        if "refresh_token" not in acc_data:
+            logger.warning(f"Account {account_num}: refresh_token not found, skipping")
+            continue
+        
+        account = AccountConfig(
+            id=acc_data.get("id", f"account-{account_num}"),
+            refresh_token=acc_data["refresh_token"],
+            profile_arn=acc_data.get("profile_arn"),
+            region=acc_data.get("region", "us-east-1"),
+            overage=acc_data.get("overage", False),
+            name=acc_data.get("name", f"Account {account_num}")
+        )
+        accounts.append(account)
+        
+        if account.overage:
+            overage_count += 1
+    
+    if not accounts:
+        return None
+    
+    # Validate overage constraint: only one account can have overage=true
+    if overage_count > 1:
+        raise ValueError(f"Multiple accounts have overage enabled ({overage_count}). Only one account can have overage=true")
+    
+    health_check_interval = int(os.getenv("HEALTH_CHECK_INTERVAL_HOURS", "1"))
+    vpn_proxy_url = os.getenv("VPN_PROXY_URL")
+    
+    config = MultiAccountConfig(
+        accounts=accounts,
+        health_check_interval_hours=health_check_interval,
+        vpn_proxy_url=vpn_proxy_url
+    )
+    
+    logger.info(f"Loaded multi-account configuration from environment variables with {len(accounts)} accounts")
+    return config
 
 
 def load_multi_account_config_from_env() -> Optional[MultiAccountConfig]:
@@ -176,14 +264,20 @@ def load_multi_account_config() -> Optional[MultiAccountConfig]:
     Load multi-account configuration from environment or file.
     
     Priority:
-    1. KIRO_ACCOUNTS_JSON environment variable
-    2. KIRO_ACCOUNTS_FILE environment variable
-    3. ./kiro-accounts.json file
+    1. ACCOUNT_N_* environment variables (new approach)
+    2. KIRO_ACCOUNTS_JSON environment variable
+    3. KIRO_ACCOUNTS_FILE environment variable
+    4. ./kiro-accounts.json file
     
     Returns:
         MultiAccountConfig if found, None otherwise
     """
-    # Try environment variable first
+    # Try ACCOUNT_N_* environment variables first (new approach)
+    config = load_multi_account_config_from_env_vars()
+    if config:
+        return config
+    
+    # Try KIRO_ACCOUNTS_JSON environment variable
     config = load_multi_account_config_from_env()
     if config:
         return config
