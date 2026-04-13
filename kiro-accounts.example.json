@@ -1,0 +1,22 @@
+{
+  "accounts": [
+    {
+      "id": "dj",
+      "name": "Dj Account",
+      "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "profileArn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/default",
+      "region": "us-east-1",
+      "overage": false
+    },
+    {
+      "id": "sherra",
+      "name": "Sherra Account (Overage)",
+      "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "profileArn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/default",
+      "region": "us-east-1",
+      "overage": true
+    }
+  ],
+  "healthCheckIntervalHours": 1,
+  "vpnProxyUrl": null
+}

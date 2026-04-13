@@ -1,0 +1,22 @@
+[Unit]
+Description=Kiro Gateway - %i
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kiro
+WorkingDirectory=/opt/kiro-gateway
+Environment="PATH=/opt/kiro-gateway/.venv/bin"
+ExecStart=/opt/kiro-gateway/.venv/bin/python main.py --port %i
+EnvironmentFile=/etc/kiro-gateway/%i.env
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kiro-gateway-%i
+
+[Install]
+WantedBy=multi-user.target
