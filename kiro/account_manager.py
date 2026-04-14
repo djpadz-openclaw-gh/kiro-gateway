@@ -56,7 +56,8 @@ class AccountManager:
                 refresh_token=account_config.refresh_token,
                 profile_arn=account_config.profile_arn,
                 region=account_config.region,
-                vpn_proxy_url=config.vpn_proxy_url
+                client_id=account_config.client_id,
+                client_secret=account_config.client_secret
             )
             self.account_states[account_config.id] = AccountState(
                 account_id=account_config.id,
@@ -99,8 +100,11 @@ class AccountManager:
         
         # Log results
         for account_id, state in self.account_states.items():
+            # Find the account config to get the name
+            account_config = next((acc for acc in self.config.accounts if acc.id == account_id), None)
+            account_label = f"{account_id} ({account_config.name})" if account_config and account_config.name else account_id
             status = "✓ has credits" if state.has_credits else "✗ out of credits"
-            logger.info(f"Account {account_id}: {status}")
+            logger.info(f"Account {account_label}: {status}")
     
     async def _check_account_health(self, account_id: str):
         """
@@ -139,20 +143,30 @@ class AccountManager:
         Select the best account to use.
         
         Priority:
-        1. First account with credits (in config order)
-        2. Overage account if all are out of credits
+        1. First non-overage account with credits
+        2. Overage account if all non-overage are out of credits
+        3. Overage account as last resort
         """
         async with self.lock:
-            # Try to find an account with credits
+            # First, try to find a non-overage account with credits
             for account_config in self.config.accounts:
-                state = self.account_states[account_config.id]
+                if not account_config.overage:
+                    state = self.account_states[account_config.id]
+                    if state.has_credits:
+                        self.current_account_id = account_config.id
+                        logger.info(f"Selected account: {account_config.id}")
+                        return
+            
+            # If no non-overage account with credits, try overage account
+            overage_account = self.config.get_overage_account()
+            if overage_account:
+                state = self.account_states[overage_account.id]
                 if state.has_credits:
-                    self.current_account_id = account_config.id
-                    logger.info(f"Selected account: {account_config.id}")
+                    self.current_account_id = overage_account.id
+                    logger.info(f"Selected overage account: {overage_account.id}")
                     return
             
-            # Fall back to overage account
-            overage_account = self.config.get_overage_account()
+            # Last resort: use overage account even if out of credits
             if overage_account:
                 self.current_account_id = overage_account.id
                 logger.warning(f"All accounts out of credits, using overage account: {overage_account.id}")
@@ -213,7 +227,8 @@ class AccountManager:
     async def close(self):
         """Close all auth managers."""
         for auth_manager in self.auth_managers.values():
-            await auth_manager.close()
+            if hasattr(auth_manager, 'close'):
+                await auth_manager.close()
         logger.info("AccountManager closed")
     
     def get_account_status(self) -> Dict:

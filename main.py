@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -75,13 +75,16 @@ from kiro.config import (
     VPN_PROXY_URL,
     _warn_timeout_configuration,
 )
-from kiro.auth import KiroAuthManager
+from kiro.auth import KiroAuthManager, AuthType
 from kiro.cache import ModelInfoCache
 from kiro.model_resolver import ModelResolver
 from kiro.routes_openai import router as openai_router
 from kiro.routes_anthropic import router as anthropic_router
 from kiro.exceptions import validation_exception_handler
 from kiro.debug_middleware import DebugLoggerMiddleware
+from kiro.multi_account_config import load_multi_account_config
+from kiro.account_manager import AccountManager
+from kiro.health_checker import HealthChecker
 
 
 # --- Loguru Configuration ---
@@ -213,6 +216,14 @@ def validate_configuration() -> None:
     """
     errors = []
     
+    # Check for multi-account configuration first
+    has_multi_account = bool(os.getenv("ACCOUNT_1_REFRESH_TOKEN")) or bool(os.getenv("ACCOUNT_1_CLIENT_ID"))
+    
+    # If multi-account config exists, validation is complete
+    if has_multi_account:
+        logger.info("Multi-account configuration detected")
+        return
+    
     # Check if .env file exists (optional - can use environment variables)
     env_file = Path(".env")
     
@@ -300,133 +311,81 @@ def validate_configuration() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Manages the application lifecycle.
+    Application lifespan context manager.
     
-    Creates and initializes:
-    - Shared HTTP client with connection pooling
-    - KiroAuthManager for token management
-    - ModelInfoCache for model caching
-    
-    The shared HTTP client is used by all requests to reduce memory usage
-    and enable connection reuse. This is especially important for handling
-    concurrent requests efficiently (fixes issue #24).
+    Handles startup and shutdown of auth managers and health checker.
+    Supports both single-account and multi-account modes.
     """
-    logger.info("Starting application... Creating state managers.")
+    # Startup
+    logger.info("Starting Kiro Gateway...")
     
-    # Create shared HTTP client with connection pooling
-    # This reduces memory usage and enables connection reuse across requests
-    # Limits: max 100 total connections, max 20 keep-alive connections
-    limits = httpx.Limits(
-        max_connections=100,
-        max_keepalive_connections=20,
-        keepalive_expiry=30.0  # Close idle connections after 30 seconds
-    )
-    # Timeout configuration for streaming (long read timeout for model "thinking")
-    timeout = httpx.Timeout(
-        connect=30.0,
-        read=STREAMING_READ_TIMEOUT,  # 300 seconds for streaming
-        write=30.0,
-        pool=30.0
-    )
+    # Try to load multi-account configuration
+    multi_account_config = load_multi_account_config()
+    
+    if multi_account_config:
+        # Multi-account mode
+        logger.info(f"Initializing multi-account mode with {len(multi_account_config.accounts)} accounts")
+        
+        account_manager = AccountManager(multi_account_config)
+        await account_manager.initialize()
+        
+        health_checker = HealthChecker(
+            account_manager,
+            interval_hours=multi_account_config.health_check_interval_hours
+        )
+        await health_checker.start()
+        
+        app.state.account_manager = account_manager
+        app.state.health_checker = health_checker
+        app.state.auth_manager = None  # Not used in multi-account mode
+        
+        logger.info(f"Multi-account mode initialized. Current account: {account_manager.current_account_id}")
+    
+    else:
+        # Single-account mode (existing behavior)
+        logger.info("Initializing single-account mode...")
+        
+        auth_manager = KiroAuthManager(
+            refresh_token=REFRESH_TOKEN,
+            profile_arn=PROFILE_ARN,
+            region=REGION,
+            vpn_proxy_url=VPN_PROXY_URL
+        )
+        
+        app.state.auth_manager = auth_manager
+        app.state.account_manager = None
+        app.state.health_checker = None
+    
+    # Initialize model cache
+    model_cache = ModelInfoCache()
+    app.state.model_cache = model_cache
+    
+    # Initialize shared HTTP client for efficiency
     app.state.http_client = httpx.AsyncClient(
-        limits=limits,
-        timeout=timeout,
-        follow_redirects=True
-    )
-    logger.info("Shared HTTP client created with connection pooling")
-    
-    # Create AuthManager
-    # Priority: SQLite DB > JSON file > environment variables
-    app.state.auth_manager = KiroAuthManager(
-        refresh_token=REFRESH_TOKEN,
-        profile_arn=PROFILE_ARN,
-        region=REGION,
-        creds_file=KIRO_CREDS_FILE if KIRO_CREDS_FILE else None,
-        sqlite_db=KIRO_CLI_DB_FILE if KIRO_CLI_DB_FILE else None,
+        timeout=30,
+        follow_redirects=True,
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
     )
     
-    # Create model cache
-    app.state.model_cache = ModelInfoCache()
-    
-    # BLOCKING: Load models from Kiro API at startup
-    # This ensures the cache is populated BEFORE accepting any requests.
-    # No race conditions - requests only start after yield.
-    logger.info("Loading models from Kiro API...")
-    try:
-        token = await app.state.auth_manager.get_access_token()
-        from kiro.utils import get_kiro_headers
-        from kiro.auth import AuthType
-        headers = get_kiro_headers(app.state.auth_manager, token)
-        
-        # Build params - profileArn is only needed for Kiro Desktop auth
-        params = {"origin": "AI_EDITOR"}
-        if app.state.auth_manager.auth_type == AuthType.KIRO_DESKTOP and app.state.auth_manager.profile_arn:
-            params["profileArn"] = app.state.auth_manager.profile_arn
-        
-        list_models_url = f"{app.state.auth_manager.q_host}/ListAvailableModels"
-        logger.debug(f"Fetching models from: {list_models_url}")
-        
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                list_models_url,
-                headers=headers,
-                params=params
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                models_list = data.get("models", [])
-                await app.state.model_cache.update(models_list)
-                logger.debug(f"Successfully loaded {len(models_list)} models from Kiro API")
-            else:
-                raise Exception(f"HTTP {response.status_code}")
-    except Exception as e:
-        # FALLBACK: Use built-in model list
-        logger.error(f"Failed to fetch models from Kiro API: {e}")
-        logger.error("Using pre-configured fallback models. Not all models may be available on your plan, or the list may be outdated.")
-        
-        # Populate cache with fallback models
-        await app.state.model_cache.update(FALLBACK_MODELS)
-        logger.debug(f"Loaded {len(FALLBACK_MODELS)} fallback models")
-    
-    # Add hidden models to cache (they appear in /v1/models but not in Kiro API)
-    # Hidden models are added ALWAYS, regardless of API success/failure
-    for display_name, internal_id in HIDDEN_MODELS.items():
-        app.state.model_cache.add_hidden_model(display_name, internal_id)
-    
-    if HIDDEN_MODELS:
-        logger.debug(f"Added {len(HIDDEN_MODELS)} hidden models to cache")
-    
-    # Log final cache state
-    all_models = app.state.model_cache.get_all_model_ids()
-    logger.info(f"Model cache ready: {len(all_models)} models total")
-    
-    # Create model resolver (uses cache + hidden models + aliases for resolution)
-    app.state.model_resolver = ModelResolver(
-        cache=app.state.model_cache,
-        hidden_models=HIDDEN_MODELS,
-        aliases=MODEL_ALIASES,
-        hidden_from_list=HIDDEN_FROM_LIST
-    )
-    logger.info("Model resolver initialized")
-    
-    # Log alias configuration if any
-    if MODEL_ALIASES:
-        logger.debug(f"Model aliases configured: {list(MODEL_ALIASES.keys())}")
-    if HIDDEN_FROM_LIST:
-        logger.debug(f"Models hidden from list: {HIDDEN_FROM_LIST}")
+    logger.info("Kiro Gateway started successfully")
     
     yield
     
-    # Graceful shutdown
-    logger.info("Shutting down application...")
-    try:
+    # Shutdown
+    logger.info("Shutting down Kiro Gateway...")
+
+    
+    # Close shared HTTP client
+    if hasattr(app.state, 'http_client') and app.state.http_client:
         await app.state.http_client.aclose()
-        logger.info("Shared HTTP client closed")
-    except Exception as e:
-        logger.warning(f"Error closing shared HTTP client: {e}")
-
-
+        
+    if app.state.account_manager:
+        await app.state.health_checker.stop()
+        await app.state.account_manager.close()
+    elif app.state.auth_manager:
+        await app.state.auth_manager.close()
+    
+    logger.info("Kiro Gateway shut down")
 # --- FastAPI Application ---
 app = FastAPI(
     title=APP_TITLE,
@@ -434,6 +393,23 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan
 )
+
+
+@app.get("/health/accounts")
+async def health_accounts(request: Request):
+    """
+    Get status of all accounts (multi-account mode only).
+    
+    Returns account status including which account is currently active,
+    whether each account has credits, and error information.
+    """
+    if request.app.state.account_manager:
+        return request.app.state.account_manager.get_account_status()
+    else:
+        return {
+            "mode": "single-account",
+            "status": "ok"
+        }
 
 
 # --- CORS Middleware ---

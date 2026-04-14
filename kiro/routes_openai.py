@@ -171,7 +171,15 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
     """
     logger.info(f"Request to /v1/chat/completions (model={request_data.model}, stream={request_data.stream})")
     
-    auth_manager: KiroAuthManager = request.app.state.auth_manager
+        
+    # Get auth manager (works with both single and multi-account modes)
+    if hasattr(request.app.state, 'account_manager') and request.app.state.account_manager:
+        auth_manager = request.app.state.account_manager.get_current_auth_manager()
+        account_manager = request.app.state.account_manager
+    else:
+        auth_manager = request.app.state.auth_manager
+        account_manager = None
+
     model_cache: ModelInfoCache = request.app.state.model_cache
     
     # Note: prepare_new_request() and log_request_body() are now called by DebugLoggerMiddleware
