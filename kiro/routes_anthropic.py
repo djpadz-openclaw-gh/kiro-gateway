@@ -142,9 +142,23 @@ async def messages(
         HTTPException: On validation or API errors
     """
     logger.info(f"Request to /v1/messages (model={request_data.model}, stream={request_data.stream})")
-    
+    user_agent = request.headers.get("user-agent", "unknown")
+    logger.info(f"User-Agent: {user_agent}")
     if anthropic_version:
         logger.debug(f"Anthropic-Version header: {anthropic_version}")
+    
+    # DEBUG: Log the full request body
+    light_context = getattr(request_data, 'lightContext', False)
+    logger.debug(f"Request body - lightContext={light_context}, system_prompt_length={len(request_data.system) if request_data.system else 0}, messages_count={len(request_data.messages)}, max_tokens={request_data.max_tokens}")
+    if request_data.messages:
+        for i, msg in enumerate(request_data.messages):
+            msg_content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            msg_preview = msg_content[:500]  # Show more content
+            logger.debug(f"  Message {i}: role={msg.role}, length={len(msg_content)}, preview={msg_preview}")
+    if request_data.system:
+        system_preview = request_data.system[:200]
+        logger.debug(f"  System prompt preview: {system_preview}")
+
     
         
     # Get auth manager (works with both single and multi-account modes)

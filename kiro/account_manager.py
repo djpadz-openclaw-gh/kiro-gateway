@@ -187,6 +187,42 @@ class AccountManager:
         
         return self.auth_managers[self.current_account_id]
     
+    def get_account_status(self) -> Dict:
+        """
+        Get status of all accounts including which one is currently active.
+        
+        Returns:
+            Dict with active_account_id and status of each account
+        """
+        accounts_status = {}
+        
+        for account_config in self.config.accounts:
+            account_id = account_config.id
+            state = self.account_states[account_id]
+            
+            # Determine auth type based on credentials
+            if account_config.client_id and account_config.client_secret:
+                auth_type = "AWS_SSO_OIDC"
+            else:
+                auth_type = "KIRO_DESKTOP"
+            
+            accounts_status[account_id] = {
+                "id": account_id,
+                "name": account_config.name or account_id,
+                "auth_type": auth_type,
+                "overage": account_config.overage,
+                "has_credits": state.has_credits,
+                "last_checked": state.last_checked.isoformat() if state.last_checked else None,
+                "last_error": state.last_error,
+                "is_active": account_id == self.current_account_id
+            }
+        
+        return {
+            "mode": "multi-account",
+            "active_account_id": self.current_account_id,
+            "accounts": accounts_status
+        }
+    
     async def handle_billing_error(self, error_json: Dict) -> bool:
         """
         Handle a billing error from the API.
