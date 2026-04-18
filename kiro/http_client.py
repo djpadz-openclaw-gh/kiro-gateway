@@ -137,9 +137,10 @@ class KiroHttpClient:
                 )
                 logger.debug(f"Creating streaming HTTP client (read_timeout={STREAMING_READ_TIMEOUT}s)")
             else:
-                # For regular requests: single timeout of 300 sec
-                timeout_config = httpx.Timeout(timeout=300.0)
-                logger.debug("Creating non-streaming HTTP client (timeout=300s)")
+                # For regular requests: use 30 sec timeout to match client expectations
+                # Client typically sends 30-second socket timeout, so gateway should respect that
+                timeout_config = httpx.Timeout(timeout=30.0)
+                logger.debug("Creating non-streaming HTTP client (timeout=30s)")
             
             self.client = httpx.AsyncClient(timeout=timeout_config, follow_redirects=True)
         return self.client
@@ -171,7 +172,8 @@ class KiroHttpClient:
         method: str,
         url: str,
         json_data: dict,
-        stream: bool = False
+        stream: bool = False,
+        timeout: Optional[float] = None
     ) -> httpx.Response:
         """
         Executes an HTTP request with retry logic.
@@ -190,6 +192,9 @@ class KiroHttpClient:
             url: Request URL
             json_data: Request body (JSON)
             stream: Use streaming (default False)
+            timeout: Optional timeout in seconds for each request attempt.
+                    If provided, this timeout is applied to each retry attempt independently,
+                    ensuring the timeout is reset for each request.
         
         Returns:
             httpx.Response with successful response
@@ -205,6 +210,10 @@ class KiroHttpClient:
         last_error = None
         last_error_info: Optional[NetworkErrorInfo] = None
         
+        # Use provided timeout or fall back to 30 seconds
+        # This ensures each retry attempt gets a fresh timeout
+        request_timeout = timeout if timeout is not None else 30.0
+        
         for attempt in range(max_retries):
             try:
                 # Get current token
@@ -215,11 +224,11 @@ class KiroHttpClient:
                     # Prevent CLOSE_WAIT connection leak (issue #38)
                     headers["Connection"] = "close"
                     req = client.build_request(method, url, json=json_data, headers=headers)
-                    logger.debug("Sending request to Kiro API...")
-                    response = await client.send(req, stream=True)
+                    logger.debug(f"Sending request to Kiro API (attempt {attempt + 1}/{max_retries}, timeout={request_timeout}s)...")
+                    response = await client.send(req, stream=True, timeout=request_timeout)
                 else:
-                    logger.debug("Sending request to Kiro API...")
-                    response = await client.request(method, url, json=json_data, headers=headers)
+                    logger.debug(f"Sending request to Kiro API (attempt {attempt + 1}/{max_retries}, timeout={request_timeout}s)...")
+                    response = await client.request(method, url, json=json_data, headers=headers, timeout=request_timeout)
                 
                 # Check status
                 if response.status_code == 200:
