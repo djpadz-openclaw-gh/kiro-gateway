@@ -50,6 +50,7 @@ from kiro.converters_openai import build_kiro_payload
 from kiro.streaming_openai import stream_kiro_to_openai, collect_stream_response, stream_with_first_token_retry
 from kiro.http_client import KiroHttpClient
 from kiro.utils import generate_conversation_id
+from kiro.kiro_errors import enhance_kiro_error
 
 # Import debug_logger
 try:
@@ -60,6 +61,95 @@ except ImportError:
 
 # --- Security scheme ---
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+
+
+async def _handle_kiro_error_with_failover(
+    response,
+    http_client,
+    auth_manager,
+    account_manager,
+    request,
+    kiro_payload,
+    request_data,
+    retry_count=0,
+    max_retries=1
+):
+    """
+    Handle Kiro API error response with account failover support.
+    
+    When a 429 (quota exceeded) or billing error is received, attempts to:
+    1. Call account_manager.handle_billing_error() to switch accounts
+    2. Retry the request with the new account if failover succeeds
+    3. Return the error if all accounts fail or no failover is possible
+    
+    Returns:
+        Tuple of (should_retry, error_response)
+    """
+    try:
+        error_content = await response.aread()
+    except Exception:
+        error_content = b"Unknown error"
+    
+    error_text = error_content.decode('utf-8', errors='replace')
+    error_message = error_text
+    error_reason = None
+    error_json = {}
+    
+    # Try to parse JSON response from Kiro to extract error message and reason
+    try:
+        error_json = json.loads(error_text)
+        error_info = enhance_kiro_error(error_json)
+        error_message = error_info.user_message
+        error_reason = error_info.reason
+        logger.debug(f"Original Kiro error: {error_info.original_message} (reason: {error_info.reason})")
+    except (json.JSONDecodeError, KeyError):
+        pass
+    
+    # Check if this is a billing error that we can failover from
+    is_billing_error = (
+        response.status_code == 429 or 
+        error_reason == "MONTHLY_REQUEST_COUNT"
+    )
+    
+    # Attempt failover if:
+    # 1. This is a billing error
+    # 2. We have an account_manager (multi-account mode)
+    # 3. We haven't exceeded max retries
+    if is_billing_error and account_manager and retry_count < max_retries:
+        logger.info(f"Billing error detected (status={response.status_code}, reason={error_reason}). Attempting account failover...")
+        
+        # Attempt to switch to a different account
+        switched = await account_manager.handle_billing_error(error_json)
+        
+        if switched:
+            logger.info(f"Account failover successful. Retrying request with new account.")
+            await http_client.close()
+            return (True, None)  # Signal to retry
+        else:
+            logger.warning(f"Account failover failed - no other accounts available.")
+    
+    # No failover possible or not a billing error - return error response
+    await http_client.close()
+    
+    logger.warning(
+        f"HTTP {response.status_code} - POST /v1/chat/completions - {error_message[:100]}"
+    )
+    
+    if debug_logger:
+        debug_logger.flush_on_error(response.status_code, error_message)
+    
+    error_response = JSONResponse(
+        status_code=response.status_code,
+        content={
+            "error": {
+                "message": error_message,
+                "type": "kiro_api_error",
+                "code": response.status_code
+            }
+        }
+    )
+    
+    return (False, error_response)
 
 
 async def verify_api_key(auth_header: str = Security(api_key_header)) -> bool:
@@ -290,47 +380,61 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
         )
         
         if response.status_code != 200:
-            try:
-                error_content = await response.aread()
-            except Exception:
-                error_content = b"Unknown error"
-            
-            await http_client.close()
-            error_text = error_content.decode('utf-8', errors='replace')
-            
-            # Try to parse JSON response from Kiro to extract error message
-            error_message = error_text
-            try:
-                error_json = json.loads(error_text)
-                # Enhance Kiro API errors with user-friendly messages
-                from kiro.kiro_errors import enhance_kiro_error
-                error_info = enhance_kiro_error(error_json)
-                error_message = error_info.user_message
-                # Log original error for debugging
-                logger.debug(f"Original Kiro error: {error_info.original_message} (reason: {error_info.reason})")
-            except (json.JSONDecodeError, KeyError):
-                pass
-            
-            # Log access log for error (before flush, so it gets into app_logs)
-            logger.warning(
-                f"HTTP {response.status_code} - POST /v1/chat/completions - {error_message[:100]}"
+            # Handle error with potential failover
+            should_retry, error_response = await _handle_kiro_error_with_failover(
+                response,
+                http_client,
+                auth_manager,
+                account_manager,
+                request,
+                kiro_payload,
+                request_data,
+                retry_count=0,
+                max_retries=1
             )
             
-            # Flush debug logs on error ("errors" mode)
-            if debug_logger:
-                debug_logger.flush_on_error(response.status_code, error_message)
-            
-            # Return error in OpenAI API format
-            return JSONResponse(
-                status_code=response.status_code,
-                content={
-                    "error": {
-                        "message": error_message,
-                        "type": "kiro_api_error",
-                        "code": response.status_code
-                    }
-                }
-            )
+            if should_retry:
+                # Failover succeeded - retry the request with new account
+                logger.info("Retrying request after account failover...")
+                
+                # Get the new auth manager after failover
+                auth_manager = account_manager.get_current_auth_manager()
+                
+                # Create new HTTP client with the new auth manager
+                if request_data.stream:
+                    http_client = KiroHttpClient(auth_manager, shared_client=None)
+                else:
+                    shared_client = request.app.state.http_client
+                    http_client = KiroHttpClient(auth_manager, shared_client=shared_client)
+                
+                # Retry the request
+                url = f"{auth_manager.api_host}/generateAssistantResponse"
+                response = await http_client.request_with_retry(
+                    "POST",
+                    url,
+                    kiro_payload,
+                    stream=True
+                )
+                
+                # Check if retry succeeded
+                if response.status_code != 200:
+                    # Retry failed - return error
+                    should_retry, error_response = await _handle_kiro_error_with_failover(
+                        response,
+                        http_client,
+                        auth_manager,
+                        account_manager,
+                        request,
+                        kiro_payload,
+                        request_data,
+                        retry_count=1,
+                        max_retries=1
+                    )
+                    return error_response
+                # If retry succeeded, continue with normal response handling below
+            else:
+                # No failover possible - return error
+                return error_response
         
         # Prepare data for fallback token counting
         # Convert Pydantic models to dicts for tokenizer
